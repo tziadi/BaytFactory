@@ -1,0 +1,72 @@
+title: BaytFactory Smart Home
+views:
+  - title: Main
+    path: main
+    icon: mdi:home
+    cards:
+
+      #if[UserA]
+      - type: entities
+        title: User A
+        entities:
+          - input_boolean.user_a_home
+      #endif
+
+      #if[UserB]
+      - type: entities
+        title: User B
+        entities:
+          - input_boolean.user_b_home
+      #endif
+
+      #if[Door]
+      - type: entities
+        title: Entry
+        entities:
+          - binary_sensor.front_door
+      #endif
+
+      #if[Alarm]
+      - type: entities
+        title: Alarm
+        entities:
+          - alarm_control_panel.home_alarm
+          - switch.alarm_siren
+      #endif
+
+      #if[SmartLight]
+      - type: entities
+        title: Smart Lights
+        entities:
+          - light.lamp_a
+          - light.lamp_b
+      #endif
+
+      #if[SmartThermostat]
+      - type: thermostat
+        entity: climate.smart_thermostat
+      #endif
+
+      #if[AirConditioner]
+      - type: thermostat
+        entity: climate.air_conditioner
+      #endif
+
+      # Afficher la carte Network seulement s'il y a au moins un protocole
+      #if[Network]
+      - type: entities
+        title: Network
+        entities:
+          #if[MQTT]
+          - sensor.smarthome_spl_network_mqtt
+          #endif
+          #if[WiFi]
+          - sensor.smarthome_spl_network_wifi
+          #endif
+          #if[Zigbee]
+          - sensor.smarthome_spl_network_zigbee
+          #endif
+          #if[ZWave]
+          - sensor.smarthome_spl_network_zwave
+          #endif
+      #endif

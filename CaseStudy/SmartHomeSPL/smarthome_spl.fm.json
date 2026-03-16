@@ -1,0 +1,91 @@
+{
+  "root": "BaytFactory-Home",
+  "features": [
+    {
+      "key": "BaytFactory-Home",
+      "name": "BaytFactory Home",
+      "group": "and",
+      "children": [
+        {
+          "key": "Users",
+          "name": "Users",
+          "group": "or",
+          "children": [
+            { "key": "UserA", "name": "User A" },
+            { "key": "UserB", "name": "User B" }
+          ]
+        },
+        {
+          "key": "CommonServices",
+          "name": "Common Services",
+          "group": "and",
+          "children": [
+            {
+              "key": "Door",
+              "name": "Door",
+              "group": "xor",
+              "children": [
+                { "key": "Door_SensorOnly", "name": "Sensor Only" },
+                { "key": "Door_SensorCamera", "name": "Sensor + Camera" }
+              ]
+            },
+            {
+              "key": "Alarm",
+              "name": "Alarm",
+              "group": "xor",
+              "children": [
+                { "key": "Alarm_Siren", "name": "Siren" },
+                { "key": "Alarm_SilentNotification", "name": "Silent Notification" }
+              ]
+            },
+            {
+              "key": "SmartLight",
+              "name": "Smart Light",
+              "group": "or",
+              "children": [
+                { "key": "SmartLight_Dimmable", "name": "Dimmable" },
+                { "key": "SmartLight_Color", "name": "Color" }
+              ]
+            },
+            { "key": "AirConditioner", "name": "Air Conditioner" },
+            { "key": "SmartThermostat", "name": "Smart Thermostat" }
+          ]
+        },
+        {
+          "key": "Network",
+          "name": "Network/Protocol",
+          "group": "or",
+          "children": [
+            { "key": "Zigbee", "name": "Zigbee" },
+            { "key": "ZWave", "name": "Z-Wave" },
+            { "key": "WiFi", "name": "Wi-Fi" },
+            { "key": "MQTT", "name": "MQTT" }
+          ]
+        },
+        {
+          "key": "EnergyMode",
+          "name": "Energy Mode",
+          "group": "xor",
+          "children": [
+            { "key": "NormalMode", "name": "Normal Mode" },
+            { "key": "EcoMode", "name": "Eco Mode" }
+          ]
+        }
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "if": "SmartThermostat",
+      "requires": ["AirConditioner"]
+    },
+    {
+      "if": "Door_SensorCamera",
+      "requires": ["WiFi"]
+    },
+    {
+      "if": "EcoMode",
+      "excludes": ["SmartLight_Color"]
+    }
+  ]
+}

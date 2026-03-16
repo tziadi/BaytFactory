@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Annotated Monaco</title>
+    <style>
+      html, body, #app {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: sans-serif;
+      }
+
+      #editor {
+        width: 100%;
+        height: 100%;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="editor"></div>
+    </div>
+    <script>
+      const Streamlit = {
+        API_VERSION: 1,
+        RENDER_EVENT: "streamlit:render",
+        setComponentReady() {
+          window.addEventListener("message", this.onMessageEvent.bind(this));
+          this.sendBackMsg("streamlit:componentReady", { apiVersion: this.API_VERSION });
+        },
+        setFrameHeight(height) {
+          const nextHeight = height || document.body.scrollHeight;
+          this.sendBackMsg("streamlit:setFrameHeight", { height: nextHeight });
+        },
+        setComponentValue(value) {
+          this.sendBackMsg("streamlit:setComponentValue", { value, dataType: "json" });
+        },
+        sendBackMsg(type, data) {
+          window.parent.postMessage({ isStreamlitMessage: true, type, ...data }, "*");
+        },
+        onMessageEvent(event) {
+          if (event.data.type !== this.RENDER_EVENT) return;
+          const renderEvent = new CustomEvent(this.RENDER_EVENT, {
+            detail: {
+              args: event.data.args || {},
+              theme: event.data.theme || null,
+              disabled: Boolean(event.data.disabled),
+            },
+          });
+          window.dispatchEvent(renderEvent);
+        },
+      };
+
+      let editor = null;
+      let model = null;
+      let decorations = [];
+      let monacoReady = false;
+      let currentPath = null;
+      let suppressChangeEvent = false;
+      let pendingRenderArgs = null;
+      let completionRegistration = null;
+      let eventCounter = 0;
+
+      const styleEl = document.createElement("style");
+      document.head.appendChild(styleEl);
+
+      function debounce(fn, wait) {
+        let timer = null;
+        return (...args) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn(...args), wait);
+        };
+      }
+
+      function hexToRgba(hex, alpha) {
+        const normalized = (hex || "#d8e1e8").replace("#", "");
+        const full = normalized.length === 3
+          ? normalized.split("").map((c) => c + c).join("")
+          : normalized;
+        const int = parseInt(full, 16);
+        const r = (int >> 16) & 255;
+        const g = (int >> 8) & 255;
+        const b = int & 255;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+
+      function ensureMonaco(callback) {
+        if (monacoReady) {
+          callback();
+          return;
+        }
+        require.config({
+          paths: {
+            vs: "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs",
+          },
+        });
+        require(["vs/editor/editor.main"], () => {
+          monacoReady = true;
+          callback();
+        });
+      }
+
+      const sendValue = debounce((value) => {
+        Streamlit.setComponentValue({
+          value,
+          action: "change",
+          eventId: ++eventCounter,
+        });
+      }, 180);
+
+      function emitAction(action) {
+        if (!editor) return;
+        Streamlit.setComponentValue({
+          value: editor.getValue(),
+          action,
+          eventId: ++eventCounter,
+        });
+      }
+
+      function annotationCss(annotations) {
+        return annotations.map((annotation, index) => {
+          const lineColor = hexToRgba(annotation.color, annotation.active ? 0.18 : 0.08);
+          const guardColor = hexToRgba(annotation.color, annotation.active ? 0.3 : 0.16);
+          return `
+            .bayt-line-${index} {
+              background: ${lineColor};
+              border-left: 3px solid ${annotation.color};
+            }
+            .bayt-inline-${index} {
+              background: ${guardColor};
+              border-radius: 4px;
+              font-weight: 700;
+            }
+            .bayt-glyph-${index} {
+              background: ${annotation.color};
+              width: 8px !important;
+              min-width: 8px !important;
+              height: 70% !important;
+              margin-top: 4px;
+              margin-left: 5px;
+              border-radius: 999px;
+            }
+          `;
+        }).join("\n");
+      }
+
+      function buildDecorations(monaco, annotations) {
+        return annotations.map((annotation, index) => ({
+          range: new monaco.Range(annotation.start, 1, annotation.end, 1),
+          options: {
+            isWholeLine: true,
+            className: `bayt-line-${index}`,
+            glyphMarginClassName: `bayt-glyph-${index}`,
+            glyphMarginHoverMessage: [{ value: annotation.expr || "Feature annotation" }],
+            minimap: {
+              color: annotation.color,
+              position: monaco.editor.MinimapPosition.Inline,
+            },
+            overviewRuler: {
+              color: annotation.color,
+              position: monaco.editor.OverviewRulerLane.Full,
+            },
+          },
+        })).concat(
+          annotations.map((annotation, index) => ({
+            range: new monaco.Range(annotation.start, 1, annotation.start, 200),
+            options: {
+              inlineClassName: `bayt-inline-${index}`,
+            },
+          }))
+        );
+      }
+
+      function currentWordRange(model, position) {
+        const word = model.getWordUntilPosition(position);
+        return {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+      }
+
+      function getAnnotationContext(model, position) {
+        const linePrefix = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+        const trimmed = linePrefix.trimStart();
+        const ifStartMatch = linePrefix.match(/#if\[[^\]]*$/);
+        const logicalMatch = linePrefix.match(/#if\[[^\]]*\]\s+(and|or)\s+\[[^\]]*$/);
+        const lineStartsAnnotation = /^#?i?f?$/i.test(trimmed) || trimmed === "#" || trimmed.startsWith("#if");
+        return {
+          linePrefix,
+          trimmed,
+          lineStartsAnnotation,
+          inFeatureSlot: Boolean(ifStartMatch || logicalMatch),
+        };
+      }
+
+      function snippetInsertRange(model, position) {
+        const lineContent = model.getLineContent(position.lineNumber);
+        const left = lineContent.slice(0, position.column - 1);
+        const hashIndex = left.lastIndexOf("#");
+        if (hashIndex !== -1 && /^\s*#?[a-zA-Z]*$/.test(left.slice(hashIndex))) {
+          return {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: hashIndex + 1,
+            endColumn: position.column,
+          };
+        }
+        return currentWordRange(model, position);
+      }
+
+      function completionInsertText(kind, trimmed) {
+        if (kind === "endif") {
+          return "#endif";
+        }
+
+        if (kind === "guard") {
+          return "#if[${1:FeatureName}]";
+        }
+        if (kind === "block") {
+          return "#if[${1:FeatureName}]\n${2}\n#endif";
+        }
+        if (kind === "condition") {
+          return "#if[${1:FeatureA}] ${2|and,or|} [${3:FeatureB}]";
+        }
+        return "#if";
+      }
+
+      function registerCompletionProvider(monaco, language, features) {
+        if (completionRegistration) {
+          completionRegistration.dispose();
+          completionRegistration = null;
+        }
+
+        completionRegistration = monaco.languages.registerCompletionItemProvider(language || "plaintext", {
+          triggerCharacters: ["#", "["],
+          provideCompletionItems(model, position) {
+            const context = getAnnotationContext(model, position);
+            const range = currentWordRange(model, position);
+            const snippetRange = snippetInsertRange(model, position);
+            const suggestions = [];
+
+            if (context.lineStartsAnnotation) {
+              suggestions.push({
+                label: "#if",
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: completionInsertText("guard", context.trimmed),
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                documentation: "Start a SPL guard.",
+                range: snippetRange,
+                sortText: "000",
+              });
+
+              suggestions.push({
+                label: "#if block",
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: completionInsertText("block", context.trimmed),
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                documentation: "Insert a SPL feature block.",
+                range: snippetRange,
+                sortText: "001",
+              });
+
+              suggestions.push({
+                label: "#if condition",
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: completionInsertText("condition", context.trimmed),
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                documentation: "Insert a SPL conditional guard.",
+                range: snippetRange,
+                sortText: "002",
+              });
+
+              suggestions.push({
+                label: "#endif",
+                kind: monaco.languages.CompletionItemKind.Keyword,
+                insertText: completionInsertText("endif", context.trimmed),
+                documentation: "Close a SPL guard block.",
+                range: snippetRange,
+                sortText: "003",
+              });
+            }
+
+            if (context.inFeatureSlot) {
+              features.forEach((feature) => {
+                suggestions.push({
+                  label: feature,
+                  kind: monaco.languages.CompletionItemKind.Constant,
+                  insertText: feature,
+                  documentation: "Feature from the active FM.",
+                  range,
+                  sortText: `1-${feature}`,
+                });
+              });
+            }
+
+            return { suggestions };
+          },
+        });
+      }
+
+      function ensureEditor(args) {
+        const height = typeof args.height === "number" ? `${args.height}px` : (args.height || "620px");
+        document.getElementById("app").style.height = height;
+        document.getElementById("editor").style.height = height;
+
+        if (!editor) {
+          model = monaco.editor.createModel(args.value || "", args.language || "plaintext");
+          editor = monaco.editor.create(document.getElementById("editor"), {
+            model,
+            theme: args.theme || "vs-light",
+            automaticLayout: true,
+            minimap: { enabled: true },
+            glyphMargin: true,
+            quickSuggestions: true,
+            suggestOnTriggerCharacters: true,
+            snippetSuggestions: "top",
+            scrollBeyondLastLine: false,
+            roundedSelection: true,
+            fontSize: 14,
+            tabSize: 2,
+            insertSpaces: true,
+          });
+          editor.onDidChangeModelContent(() => {
+            if (suppressChangeEvent) return;
+            sendValue(editor.getValue());
+          });
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            emitAction("save");
+          });
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => {
+            editor.trigger("keyboard", "editor.action.triggerSuggest", {});
+          });
+          editor.addCommand(monaco.KeyCode.F1, () => {
+            editor.trigger("keyboard", "editor.action.quickCommand", {});
+          });
+          currentPath = args.path || "file.txt";
+          registerCompletionProvider(monaco, args.language || "plaintext", args.features || []);
+        }
+
+        if (currentPath !== (args.path || "file.txt")) {
+          currentPath = args.path || "file.txt";
+          model.dispose();
+          model = monaco.editor.createModel(args.value || "", args.language || "plaintext");
+          editor.setModel(model);
+        } else {
+          monaco.editor.setModelLanguage(model, args.language || "plaintext");
+          if (editor.getValue() !== (args.value || "")) {
+            suppressChangeEvent = true;
+            const position = editor.getPosition();
+            editor.setValue(args.value || "");
+            if (position) editor.setPosition(position);
+            suppressChangeEvent = false;
+          }
+        }
+
+        registerCompletionProvider(monaco, args.language || "plaintext", args.features || []);
+        monaco.editor.setTheme(args.theme || "vs-light");
+        styleEl.textContent = annotationCss(args.annotations || []);
+        decorations = editor.deltaDecorations(decorations, buildDecorations(monaco, args.annotations || []));
+        Streamlit.setFrameHeight(typeof args.height === "number" ? args.height : parseInt(height, 10) + 8);
+      }
+
+      window.addEventListener(Streamlit.RENDER_EVENT, (event) => {
+        pendingRenderArgs = event.detail.args;
+        ensureMonaco(() => ensureEditor(pendingRenderArgs));
+      });
+
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(640);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+# Exemple d'automations simples, conditionnées par features
+
+#if[Alarm] and [Door]
+- alias: "Alarm: trigger if front door opens while armed"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.front_door
+      to: "on"
+  condition:
+    - condition: state
+      entity_id: alarm_control_panel.home_alarm
+      state: "armed_away"
+  action:
+    - service: alarm_control_panel.alarm_trigger
+      target:
+        entity_id: alarm_control_panel.home_alarm
+#endif

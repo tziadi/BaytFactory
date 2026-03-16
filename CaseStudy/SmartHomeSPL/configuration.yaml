@@ -1,0 +1,87 @@
+homeassistant:
+  name: BaytFactory Smart Home
+  unit_system: metric
+  time_zone: UTC
+ffmpeg:
+  ffmpeg_bin: /opt/homebrew/bin/ffmpeg   # Intel mac
+default_config:
+
+# Automations & scripts (tu peux les utiliser si tu veux)
+automation: !include automations.yaml
+script: !include scripts.yaml
+
+# =========================
+# Users helpers (optionnels)
+# =========================
+input_boolean:
+  #if[UserA]
+  user_a_home:
+    name: User A Home
+    icon: mdi:account
+    initial: off
+  #endif
+  #if[UserB]
+  user_b_home:
+    name: User B Home
+    icon: mdi:account
+    initial: off
+  #endif
+
+
+
+# =========================
+# Alarm (panneau manuel si feature Alarm)
+# =========================
+#if[Alarm]
+alarm_control_panel:
+  - platform: manual
+    name: Home Alarm
+    arming_time: 0
+    delay_time: 0
+    trigger_time: 180
+#endif
+
+# =========================
+# Charger les plateformes SPL (CRUCIAL)
+# =========================
+#if[Door]
+binary_sensor:
+  - platform: smarthome_spl
+#endif
+
+#if[Alarm]
+switch:
+  - platform: smarthome_spl
+#endif
+
+#if[SmartLight]
+light:
+  - platform: smarthome_spl
+#endif
+
+#if[SmartThermostat] or [AirConditioner]
+climate:
+  - platform: smarthome_spl
+#endif
+
+# Charger les capteurs réseau si AU MOINS un protocole est choisi
+#if[Network]
+sensor:
+  - platform: smarthome_spl
+#endif
+
+# =========================
+# MQTT (si sélectionné)
+# =========================
+#if[MQTT]
+mqtt:
+  discovery: true
+  broker: localhost
+  port: 1883
+#endif
+
+# =========================
+# Lovelace en YAML (le dashboard.py copie lovelace_spl.yaml -> ui-lovelace.yaml)
+# =========================
+lovelace:
+  mode: yaml

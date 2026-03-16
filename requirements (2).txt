@@ -1,0 +1,14 @@
+# Core runtime
+streamlit>=1.37,<2
+python-dotenv>=1.0
+
+# SAT backend (choose one; z3 is the default here)
+z3-solver>=4.13.0
+# Alternatively, you can use PySAT instead of z3:
+# python-sat[pblib,aiger]>=0.1.8
+
+# (Optional) Launch Home Assistant from the app
+# homeassistant>=2024.5
+
+# If your SATFeatureSolver lives in a local module (sat_interactive.py),
+# you don't need to install anything else for it here.
