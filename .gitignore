@@ -4,6 +4,5 @@
 __pycache__/
 *.pyc
 
-InsightMapper/
 spl-smarthome-generated-variants/
 docs/screenshots/*.tmp
